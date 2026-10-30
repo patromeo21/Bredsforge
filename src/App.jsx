@@ -1,15 +1,15 @@
-// src/App.jsx
+// src/App.jsx - Segregated Bento Dashboard + M8 Retro-Digital Tracker UI
 import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine } from './audioEngine';
 import { SCALES, NOTE_NAMES, midiToNoteName } from './scales';
 
 export default function App() {
-  const [volume, setVolume] = useState(0.8);
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeStep, setActiveStep] = useState(null);
   const [selectedTrack, setSelectedTrack] = useState(0);
-  const [selectedStepIndex, setSelectedStepIndex] = useState(null);
+  const [selectedRowIndex, setSelectedRowIndex] = useState(0);
 
+  const [rowResolution, setRowResolution] = useState(32);
   const [selectedScale, setSelectedScale] = useState('Minor');
   const [rootNoteMidi, setRootNoteMidi] = useState(60);
 
@@ -19,8 +19,41 @@ export default function App() {
   const visualizerCanvasRef = useRef(null);
 
   const currentTrack = tracks[selectedTrack];
-  const currentStepData = selectedStepIndex !== null ? currentTrack.pattern[selectedStepIndex] : null;
+  const selectedStepData = selectedRowIndex !== null ? currentTrack.pattern[selectedRowIndex] : null;
 
+  // QWERTY & Arrow Hotkeys
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (['input', 'select', 'textarea'].includes(document.activeElement.tagName.toLowerCase())) return;
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedRowIndex(prev => Math.max(0, (prev !== null ? prev : 0) - 1));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedRowIndex(prev => Math.min(rowResolution - 1, (prev !== null ? prev : 0) + 1));
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setSelectedTrack(prev => Math.max(0, prev - 1));
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setSelectedTrack(prev => Math.min(tracks.length - 1, prev + 1));
+      } else if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        handleTogglePlay();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        if (selectedRowIndex !== null) {
+          updateStepProperty('active', false);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRowIndex, selectedTrack, rowResolution, tracks]);
+
+  // Render Sample Waveform with Trim Markers
   useEffect(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
@@ -36,7 +69,7 @@ export default function App() {
       const step = Math.ceil(data.length / width);
       const amp = height / 2;
 
-      ctx.fillStyle = '#0f172a';
+      ctx.fillStyle = '#030712';
       ctx.fillRect(0, 0, width, height);
 
       ctx.beginPath();
@@ -55,15 +88,30 @@ export default function App() {
         ctx.lineTo(i, (1 + max) * amp);
       }
       ctx.stroke();
+
+      const startX = width * (currentTrack.sampleStartTrim || 0);
+      const endX = width * (currentTrack.sampleEndTrim || 1);
+
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+      ctx.fillRect(0, 0, startX, height);
+      ctx.fillRect(endX, 0, width - endX, height);
+
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startX, 0); ctx.lineTo(startX, height);
+      ctx.moveTo(endX, 0); ctx.lineTo(endX, height);
+      ctx.stroke();
     } else {
-      ctx.fillStyle = '#1e293b';
+      ctx.fillStyle = '#0b0f19';
       ctx.fillRect(0, 0, width, height);
-      ctx.fillStyle = '#64748b';
-      ctx.font = '12px monospace';
-      ctx.fillText('No sample buffer (Synth Oscillator Mode)', 15, height / 2 + 4);
+      ctx.fillStyle = '#475569';
+      ctx.font = '11px monospace';
+      ctx.fillText('Synth Oscillator Mode (Import WAV)', 12, height / 2 + 4);
     }
   }, [selectedTrack, tracks]);
 
+  // Render 60FPS Spectrum Analyzer
   useEffect(() => {
     let animId;
     const canvas = visualizerCanvasRef.current;
@@ -81,15 +129,13 @@ export default function App() {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const barWidth = (canvas.width / bufferLength) * 2.5;
+      const barWidth = (canvas.width / bufferLength) * 2.2;
       let barWidthPos = 0;
 
       for (let i = 0; i < bufferLength; i++) {
         const barHeight = (dataArray[i] / 255) * canvas.height;
-
         ctx.fillStyle = isPlaying ? '#10b981' : '#334155';
         ctx.fillRect(barWidthPos, canvas.height - barHeight, barWidth, barHeight);
-
         barWidthPos += barWidth + 1;
       }
     };
@@ -98,54 +144,53 @@ export default function App() {
     return () => cancelAnimationFrame(animId);
   }, [isPlaying]);
 
-  const toggleStep = (stepIndex) => {
-    const existing = currentTrack.pattern[stepIndex];
-    const newActive = !existing.active;
+  const selectCell = (trackIndex, rowIndex) => {
+    setSelectedTrack(trackIndex);
+    setSelectedRowIndex(rowIndex);
+  };
 
-    const updatedStep = { ...existing, active: newActive };
-    audioEngine.setStepData(selectedTrack, stepIndex, updatedStep);
+  const toggleStepActive = (trackIndex, rowIndex) => {
+    const targetTrack = tracks[trackIndex];
+    const existing = targetTrack.pattern[rowIndex];
+    const updatedStep = { ...existing, active: !existing.active };
+
+    audioEngine.setStepData(trackIndex, rowIndex, updatedStep);
 
     const updatedTracks = [...tracks];
-    updatedTracks[selectedTrack].pattern[stepIndex] = updatedStep;
+    updatedTracks[trackIndex].pattern[rowIndex] = updatedStep;
     setTracks(updatedTracks);
-    setSelectedStepIndex(stepIndex);
+    setSelectedTrack(trackIndex);
+    setSelectedRowIndex(rowIndex);
+
+    if (updatedStep.active) {
+      if (targetTrack.type === 'sample' && targetTrack.sampleBuffer) {
+        audioEngine.playSampleBuffer(targetTrack, updatedStep);
+      } else {
+        audioEngine.playSynthTone(targetTrack, updatedStep);
+      }
+    }
   };
 
   const updateStepProperty = (key, value) => {
-    if (selectedStepIndex === null) return;
-
-    const existing = currentTrack.pattern[selectedStepIndex];
+    if (selectedRowIndex === null) return;
+    const existing = currentTrack.pattern[selectedRowIndex];
     const updatedStep = { ...existing, [key]: value };
 
-    audioEngine.setStepData(selectedTrack, selectedStepIndex, updatedStep);
-
+    audioEngine.setStepData(selectedTrack, selectedRowIndex, updatedStep);
     const updatedTracks = [...tracks];
-    updatedTracks[selectedTrack].pattern[selectedStepIndex] = updatedStep;
+    updatedTracks[selectedTrack].pattern[selectedRowIndex] = updatedStep;
     setTracks(updatedTracks);
   };
 
-  const updateTrackADSR = (param, val) => {
-    const numVal = parseFloat(val);
-    const updated = { ...currentTrack, [param]: numVal };
-
-    audioEngine.setTrackADSR(
-      selectedTrack,
-      param === 'attack' ? numVal : currentTrack.attack,
-      param === 'decay' ? numVal : currentTrack.decay,
-      param === 'sustain' ? numVal : currentTrack.sustain,
-      param === 'release' ? numVal : currentTrack.release,
-      param === 'cutoff' ? numVal : currentTrack.cutoff
-    );
-
-    const updatedTracks = [...tracks];
-    updatedTracks[selectedTrack] = updated;
-    setTracks(updatedTracks);
+  const handleRowResolutionChange = (res) => {
+    const newRes = parseInt(res, 10);
+    setRowResolution(newRes);
+    audioEngine.setRowResolution(newRes);
   };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     try {
       await audioEngine.loadSample(selectedTrack, file);
       const updatedTracks = [...tracks];
@@ -164,214 +209,92 @@ export default function App() {
       setIsPlaying(false);
       setActiveStep(null);
     } else {
-      audioEngine.startSequencer((step) => {
-        setActiveStep(step);
-      });
+      audioEngine.startSequencer((step) => setActiveStep(step));
       setIsPlaying(true);
     }
   };
 
-  const exportProjectJson = () => {
-    const projectData = {
-      version: '1.0.0',
-      tempo: audioEngine.tempo,
-      tracks: audioEngine.tracks.map(t => ({
-        id: t.id,
-        name: t.name,
-        type: t.type,
-        oscType: t.oscType,
-        sampleName: t.sampleName,
-        attack: t.attack,
-        decay: t.decay,
-        sustain: t.sustain,
-        release: t.release,
-        cutoff: t.cutoff,
-        pattern: t.pattern
-      }))
-    };
-
-    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bredforge-session.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importProjectJson = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target.result);
-        audioEngine.tempo = data.tempo || 120;
-        audioEngine.tracks = data.tracks.map(t => ({
-          ...t,
-          sampleBuffer: null
-        }));
-        setTracks([...audioEngine.tracks]);
-        alert('Project session successfully loaded offline!');
-      } catch (err) {
-        alert('Invalid project file format.');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const exportMasterWav = async () => {
-    audioEngine.init();
-    const wavBlob = await audioEngine.renderMasterWav();
-    const url = URL.createObjectURL(wavBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bredforge-master-mix.wav';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const scaleIntervals = SCALES[selectedScale] || SCALES.Chromatic;
-  const availableMidiNotes = scaleIntervals.map(i => rootNoteMidi + i);
-
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#f8fafc', padding: '1.25rem', fontFamily: 'monospace', touchAction: 'manipulation' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: '#030712', color: '#f8fafc', padding: '1rem', fontFamily: 'system-ui, sans-serif' }}>
       
-      {/* Header */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid #1e293b', paddingBottom: '0.75rem' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid #1f2937', paddingBottom: '0.6rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#38bdf8', margin: 0 }}>BredForge DAW</h1>
-          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Production Release (Offline PWA Engine)</span>
+          <h1 style={{ fontSize: '1.3rem', fontWeight: '800', color: '#38bdf8', margin: 0 }}>BredForge <span style={{ color: '#10b981', fontSize: '0.9rem' }}>M8 PRO</span></h1>
+          <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Segregated Bento Studio + Retro-Digital 8-Bit Tracker</span>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={exportProjectJson} style={{ backgroundColor: '#334155', color: 'white', border: 'none', padding: '0.5rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.75rem', cursor: 'pointer' }}>💾 Save JSON</button>
-          <label style={{ backgroundColor: '#334155', color: 'white', padding: '0.5rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.75rem', cursor: 'pointer', display: 'inline-block' }}>📂 Load JSON<input type="file" accept=".json" onChange={importProjectJson} style={{ display: 'none' }} /></label>
-          <button onClick={exportMasterWav} style={{ backgroundColor: '#0284c7', color: 'white', border: 'none', padding: '0.5rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}>🎵 Export WAV</button>
-          <button onClick={handleTogglePlay} style={{ backgroundColor: isPlaying ? '#ef4444' : '#10b981', color: 'white', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontWeight: 'bold', cursor: 'pointer' }}>{isPlaying ? '■ STOP' : '▶ PLAY'}</button>
+        <div>
+          <button onClick={handleTogglePlay} style={{ backgroundColor: isPlaying ? '#ef4444' : '#10b981', color: 'white', border: 'none', padding: '0.4rem 1.1rem', borderRadius: '0.375rem', fontWeight: 'bold', cursor: 'pointer' }}>{isPlaying ? '■ STOP' : '▶ PLAY'}</button>
         </div>
       </header>
 
-      <main style={{ display: 'grid', gap: '1rem', maxWidth: '900px', margin: '0 auto' }}>
+      <main style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1rem', maxWidth: '1280px', margin: '0 auto' }}>
         
-        {/* Visualizer Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-          <div style={{ backgroundColor: '#111827', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-            <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem' }}>SAMPLE WAVEFORM CANVAS</span>
-            <canvas ref={waveformCanvasRef} width={400} height={80} style={{ width: '100%', borderRadius: '0.25rem', border: '1px solid #334155' }} />
+        {/* LEFT: M8 Tracker Display */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#111827', padding: '0.6rem 0.9rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#38bdf8' }}>PATTERN MATRIX</span>
+            <select value={rowResolution} onChange={(e) => handleRowResolutionChange(e.target.value)} style={{ backgroundColor: '#1f2937', color: '#f8fafc', border: '1px solid #374151', padding: '0.2rem', borderRadius: '0.25rem', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+              <option value={16}>16 Rows</option>
+              <option value={32}>32 Rows (Roll)</option>
+            </select>
           </div>
 
-          <div style={{ backgroundColor: '#111827', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 'bold', display: 'block', marginBottom: '0.5rem' }}>60FPS SPECTRUM ANALYZER</span>
-            <canvas ref={visualizerCanvasRef} width={400} height={80} style={{ width: '100%', borderRadius: '0.25rem', border: '1px solid #334155' }} />
+          <div style={{ backgroundColor: '#030712', padding: '0.75rem', borderRadius: '0.5rem', border: '2px solid #1f2937', maxHeight: '460px', overflowY: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '45px repeat(4, 1fr)', gap: '0.5rem', borderBottom: '1px solid #1e293b', paddingBottom: '0.4rem', marginBottom: '0.4rem', fontFamily: 'monospace', fontSize: '0.7rem', fontWeight: 'bold' }}>
+              <span style={{ color: '#475569' }}>ROW</span>
+              {tracks.map(t => <span key={t.id} style={{ color: selectedTrack === t.id ? '#38bdf8' : '#64748b' }}>{t.name}</span>)}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              {Array(rowResolution).fill(null).map((_, rowIndex) => {
+                const isCurrentRow = activeStep === rowIndex;
+                const rowHex = String(rowIndex.toString(16)).padStart(2, '0').toUpperCase();
+                return (
+                  <div key={rowIndex} style={{ display: 'grid', gridTemplateColumns: '45px repeat(4, 1fr)', gap: '0.5rem', backgroundColor: isCurrentRow ? '#1e1b4b' : 'transparent', borderLeft: isCurrentRow ? '3px solid #f59e0b' : '3px solid transparent', padding: '0.15rem 0' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: isCurrentRow ? '#f59e0b' : '#475569', alignSelf: 'center' }}>{rowHex}</span>
+                    {tracks.map((track) => {
+                      const step = track.pattern[rowIndex];
+                      const isSelectedCell = selectedTrack === track.id && selectedRowIndex === rowIndex;
+                      return (
+                        <div key={track.id} onClick={() => selectCell(track.id, rowIndex)} onDoubleClick={() => toggleStepActive(track.id, rowIndex)} style={{ display: 'flex', justifyContent: 'space-between', backgroundColor: isSelectedCell ? '#0284c7' : (step.active ? '#0b0f19' : '#030712'), color: step.active ? '#38bdf8' : '#334155', padding: '0.25rem 0.4rem', borderRadius: '0.2rem', fontFamily: 'monospace', fontSize: '0.75rem', cursor: 'pointer' }}>
+                          <span style={{ fontWeight: 'bold', color: step.active ? '#f8fafc' : '#334155' }}>{step.active ? midiToNoteName(step.midi) : '---'}</span>
+                          <span style={{ color: step.active ? '#c084fc' : '#334155' }}>{step.active ? String(step.inst || 1).padStart(2, '0') : '--'}</span>
+                          <span style={{ color: step.active ? '#10b981' : '#334155' }}>{step.active ? `V${Math.round((step.velocity || 0.8) * 99)}` : '---'}</span>
+                          <span style={{ color: step.active ? '#facc15' : '#334155' }}>{step.active && step.fxType === 'CUT' ? `C${step.fxValue}` : '------'}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        {/* Channel & Sample Bar */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-          <div style={{ backgroundColor: '#111827', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'block', marginBottom: '0.5rem' }}>TRACK CHANNEL</span>
-            <div style={{ display: 'flex', gap: '0.4rem' }}>
+        {/* RIGHT: Bento Sound Sculpting Sidebar */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ backgroundColor: '#111827', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
+            <span style={{ fontSize: '0.75rem', color: '#9ca3af', fontWeight: 'bold', display: 'block', marginBottom: '0.4rem' }}>ACTIVE CHANNEL</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
               {tracks.map((t) => (
-                <button key={t.id} onClick={() => { setSelectedTrack(t.id); setSelectedStepIndex(null); }} style={{ flex: 1, padding: '0.4rem', backgroundColor: selectedTrack === t.id ? '#0284c7' : '#1f2937', color: 'white', border: 'none', borderRadius: '0.25rem', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}>{t.name}</button>
+                <button key={t.id} onClick={() => setSelectedTrack(t.id)} style={{ padding: '0.4rem', backgroundColor: selectedTrack === t.id ? '#0284c7' : '#1f2937', color: 'white', border: 'none', borderRadius: '0.25rem', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>{t.name}</button>
               ))}
             </div>
           </div>
 
-          <div style={{ backgroundColor: '#111827', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'block', marginBottom: '0.5rem' }}>SCALE & ROOT</span>
-            <select value={selectedScale} onChange={(e) => setSelectedScale(e.target.value)} style={{ width: '100%', backgroundColor: '#1f2937', color: 'white', border: '1px solid #374151', padding: '0.3rem', borderRadius: '0.25rem', fontSize: '0.8rem' }}>
-              {Object.keys(SCALES).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-          <div style={{ backgroundColor: '#111827', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af', display: 'block', marginBottom: '0.5rem' }}>AUDIO SAMPLE</span>
-            <label style={{ backgroundColor: '#0284c7', color: 'white', padding: '0.4rem 0.8rem', borderRadius: '0.25rem', fontSize: '0.75rem', cursor: 'pointer', display: 'inline-block' }}>📁 Import WAV<input type="file" accept="audio/*" onChange={handleFileUpload} style={{ display: 'none' }} /></label>
-            <span style={{ fontSize: '0.7rem', color: '#10b981', display: 'block', marginTop: '0.3rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentTrack.sampleName || 'Oscillator Synth'}</span>
-          </div>
-        </div>
-
-        {/* Track ADSR */}
-        <div style={{ backgroundColor: '#111827', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-          <span style={{ fontSize: '0.8rem', color: '#38bdf8', fontWeight: 'bold', display: 'block', marginBottom: '0.75rem' }}>{currentTrack.name} ADSR & Filter Shaping</span>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.75rem', fontSize: '0.75rem' }}>
-            <div><label>Attack: {currentTrack.attack}s</label><input type="range" min="0.005" max="0.5" step="0.005" value={currentTrack.attack} onChange={(e) => updateTrackADSR('attack', e.target.value)} style={{ width: '100%', accentColor: '#38bdf8' }} /></div>
-            <div><label>Decay: {currentTrack.decay}s</label><input type="range" min="0.01" max="1.0" step="0.01" value={currentTrack.decay} onChange={(e) => updateTrackADSR('decay', e.target.value)} style={{ width: '100%', accentColor: '#38bdf8' }} /></div>
-            <div><label>Sustain: {Math.round(currentTrack.sustain * 100)}%</label><input type="range" min="0" max="1" step="0.05" value={currentTrack.sustain} onChange={(e) => updateTrackADSR('sustain', e.target.value)} style={{ width: '100%', accentColor: '#38bdf8' }} /></div>
-            <div><label>Release: {currentTrack.release}s</label><input type="range" min="0.01" max="1.5" step="0.01" value={currentTrack.release} onChange={(e) => updateTrackADSR('release', e.target.value)} style={{ width: '100%', accentColor: '#38bdf8' }} /></div>
-            <div><label>Cutoff: {currentTrack.cutoff}Hz</label><input type="range" min="200" max="8000" step="100" value={currentTrack.cutoff} onChange={(e) => updateTrackADSR('cutoff', e.target.value)} style={{ width: '100%', accentColor: '#38bdf8' }} /></div>
-          </div>
-        </div>
-
-        {/* Step Matrix */}
-        <div style={{ backgroundColor: '#111827', padding: '1.25rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '0.85rem', color: '#f3f4f6', fontWeight: 'bold' }}>Tracker Step Matrix [STEP | NOTE | VEL | FX]</span>
-            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Click step to inspect & assign commands</span>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '0.5rem' }}>
-            {currentTrack.pattern.map((step, index) => {
-              const isCurrent = activeStep === index;
-              const isActive = step.active;
-              const isSelected = selectedStepIndex === index;
-
-              let bg = '#1f2937';
-              if (isActive) bg = selectedTrack === 0 ? '#0284c7' : '#7c3aed';
-              if (isCurrent) bg = '#f59e0b';
-
-              const noteText = isActive ? midiToNoteName(step.midi) : '---';
-              const fxText = step.fxType !== 'NONE' ? `${step.fxType}` : '';
-
-              return (
-                <button key={index} onClick={() => toggleStep(index)} style={{ height: '65px', backgroundColor: bg, color: 'white', border: isSelected ? '2px solid #38bdf8' : '1px solid #374151', borderRadius: '0.375rem', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', padding: '2px' }}>
-                  <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>{String(index + 1).padStart(2, '0')}</span>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isActive ? '#f8fafc' : '#475569' }}>{noteText}</span>
-                  {fxText && <span style={{ fontSize: '0.65rem', color: '#facc15' }}>{fxText}</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Step Inspector */}
-        {selectedStepIndex !== null && currentStepData && (
-          <div style={{ backgroundColor: '#111827', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #38bdf8' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: 'bold' }}>Step {selectedStepIndex + 1} Command Inspector</span>
-              <button onClick={() => setSelectedStepIndex(null)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer' }}>✕</button>
+          <div style={{ backgroundColor: '#111827', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+              <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 'bold' }}>SAMPLE CHOPPER</span>
+              <label style={{ backgroundColor: '#0284c7', color: 'white', padding: '0.2rem 0.5rem', borderRadius: '0.25rem', fontSize: '0.65rem', cursor: 'pointer' }}>📁 Import<input type="file" accept="audio/*" onChange={handleFileUpload} style={{ display: 'none' }} /></label>
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.75rem', fontSize: '0.75rem' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.25rem', color: '#9ca3af' }}>PITCH (SCALE)</label>
-                <select value={currentStepData.midi} onChange={(e) => updateStepProperty('midi', parseInt(e.target.value, 10))} style={{ width: '100%', backgroundColor: '#1f2937', color: 'white', border: '1px solid #374151', padding: '0.25rem', borderRadius: '0.25rem' }}>
-                  {availableMidiNotes.map(m => (<option key={m} value={m}>{midiToNoteName(m)} ({m})</option>))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.25rem', color: '#9ca3af' }}>VELOCITY (VOL)</label>
-                <input type="range" min="0" max="1" step="0.05" value={currentStepData.velocity} onChange={(e) => updateStepProperty('velocity', parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#10b981' }} />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.25rem', color: '#9ca3af' }}>FX COMMAND</label>
-                <select value={currentStepData.fxType} onChange={(e) => updateStepProperty('fxType', e.target.value)} style={{ width: '100%', backgroundColor: '#1f2937', color: 'white', border: '1px solid #374151', padding: '0.25rem', borderRadius: '0.25rem' }}>
-                  <option value="NONE">NONE</option>
-                  <option value="CUT">CUT (Filter Sweep)</option>
-                  <option value="REV">REV (Reverse Sample)</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.25rem', color: '#9ca3af' }}>MICRO-NUDGE (-32 to +32)</label>
-                <input type="range" min="-32" max="32" step="1" value={currentStepData.nudge} onChange={(e) => updateStepProperty('nudge', parseInt(e.target.value, 10))} style={{ width: '100%', accentColor: '#f59e0b' }} />
-              </div>
-            </div>
+            <canvas ref={waveformCanvasRef} width={300} height={60} style={{ width: '100%', borderRadius: '0.25rem', border: '1px solid #334155' }} />
           </div>
-        )}
+
+          <div style={{ backgroundColor: '#111827', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #1f2937' }}>
+            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 'bold', display: 'block', marginBottom: '0.4rem' }}>SPECTRUM ANALYZER</span>
+            <canvas ref={visualizerCanvasRef} width={300} height={55} style={{ width: '100%', borderRadius: '0.25rem', border: '1px solid #334155' }} />
+          </div>
+        </div>
 
       </main>
     </div>
