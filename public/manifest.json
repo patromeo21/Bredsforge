@@ -1,0 +1,10 @@
+{
+  "short_name": "BredForge",
+  "name": "BredForge Tracker DAW",
+  "icons": [],
+  "start_url": "/",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "display": "standalone",
+  "orientation": "landscape"
+}
